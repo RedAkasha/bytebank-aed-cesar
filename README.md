@@ -1,7 +1,7 @@
 # ByteBank
 
 Sistema bancário FinTech desenvolvido em Python como projeto avaliativo (AV2) da disciplina
-**BD015 - Algoritmo e Estrutura de Dados** — CESAR School.
+**Algoritmo e Estrutura de Dados** — CESAR School.
 Professor: Fernando Ferreira de Carvalho.
 
 O projeto é construído em **três sprints incrementais**, cada nível servindo de pré-requisito
@@ -22,7 +22,7 @@ interativo em loop contínuo.
 
 | Opção | Funcionalidade | Descrição |
 |-------|----------------|-----------|
-| `[1]` | Consultar Saldo | Exibe o saldo disponível formatado em Real (R$ 1.234,56). |
+| `[1]` | Consultar Saldo | Exibe o saldo disponível formatado em Real (R$). |
 | `[2]` | Depositar | Credita um valor na conta. |
 | `[3]` | Sacar | Debita um valor da conta. |
 | `[4]` | Sair | Encerra o sistema exibindo o saldo final. |
