@@ -22,8 +22,16 @@ Nível 2 - Múltiplas contas e transferências PIX
     - Transferência PIX atômica, com verificação da conta de destino
       e do saldo disponível.
 
+Nível 3 - Estruturas de dados avançadas
+    - TAD PILHA: cada transação é empilhada com append(); o estorno da
+      última transação usa pop() e reverte o movimento.
+    - TAD FILA: boletos agendados são processados na ordem de chegada
+      (FIFO) com pop(0).
+
 Execução: python main.py   (Python 3.10+, apenas biblioteca padrão)
 """
+
+from datetime import datetime
 
 # ---------------------------------------------------------------------------
 # Constantes de configuração do sistema
@@ -35,6 +43,9 @@ LARGURA = 56
 NUMERO_CONTA_INICIAL = 1001
 LIMITE_SAQUE = 5000.00
 
+# Transações que só podem ser estornadas pela conta de origem.
+TIPOS_NAO_ESTORNAVEIS = ("PIX RECEBIDO", "ESTORNO RECEBIDO")
+
 
 # ---------------------------------------------------------------------------
 # Camada de apresentação (interface com o usuário)
@@ -44,6 +55,11 @@ def formatar_moeda(valor):
     texto = f"{valor:,.2f}"
     texto = texto.replace(",", "X").replace(".", ",").replace("X", ".")
     return f"R$ {texto}"
+
+
+def agora():
+    """Devolve a data e a hora corrente formatadas para o extrato."""
+    return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
 def linha(caractere="-"):
@@ -76,7 +92,12 @@ def exibir_menu():
     print("[4]  Cadastrar Conta")
     print("[5]  Buscar Conta")
     print("[6]  Transferir via PIX")
-    print("[7]  Sair")
+    print("[7]  Exibir Extrato (Pilha)")
+    print("[8]  Estornar Última Transação")
+    print("[9]  Agendar Boleto (Fila)")
+    print("[10] Pagar Próximo Boleto")
+    print("[11] Consultar Fila de Boletos")
+    print("[12] Sair")
     linha("-")
 
 
@@ -124,12 +145,20 @@ def ler_valor(rotulo):
 # Nível 2 - Coleção de contas em memória (lista de dicionários)
 # ---------------------------------------------------------------------------
 def criar_conta(numero, nome, cpf, saldo=SALDO_INICIAL):
-    """Monta o dicionário que representa uma conta do ByteBank."""
+    """
+    Monta o dicionário que representa uma conta do ByteBank.
+
+    Cada conta carrega suas próprias estruturas de dados:
+        historico    -> PILHA (LIFO) de transações
+        fila_boletos -> FILA  (FIFO) de pagamentos agendados
+    """
     return {
         "numero": numero,
         "nome": nome,
         "cpf": cpf,
         "saldo": saldo,
+        "historico": [],
+        "fila_boletos": [],
     }
 
 
@@ -209,6 +238,133 @@ def consultar_conta(contas):
 
 
 # ---------------------------------------------------------------------------
+# Nível 3 - TAD Pilha: histórico de transações e estorno
+# ---------------------------------------------------------------------------
+def registrar_transacao(conta, tipo, valor, delta, descricao, extra=None):
+    """
+    Empilha (append) uma transação no histórico da conta.
+
+    O campo delta guarda o efeito no saldo corrente e permite que o
+    estorno desfaça a operação.
+    """
+    transacao = {
+        "tipo": tipo,
+        "valor": valor,
+        "delta": delta,
+        "descricao": descricao,
+        "data": agora(),
+    }
+
+    if extra:
+        transacao.update(extra)
+
+    conta["historico"].append(transacao)
+    return transacao
+
+
+def exibir_extrato(conta):
+    """Percorre a pilha do topo para a base, exibindo o extrato."""
+    titulo("EXTRATO")
+
+    if not conta["historico"]:
+        print("[AVISO] Nenhuma transação registrada até o momento.")
+        return
+
+    print("Leitura da pilha: do topo (mais recente) para a base.")
+    linha("-")
+
+    posicao = len(conta["historico"])
+    for transacao in reversed(conta["historico"]):
+        sinal = "+" if transacao["delta"] > 0 else "-"
+        print(
+            f"{posicao:>3}. "
+            f"{transacao['data']:<17}"
+            f"{transacao['tipo']:<20}"
+            f"{sinal + formatar_moeda(transacao['valor']):>14}"
+        )
+        print(f"     {transacao['descricao']}")
+        posicao = posicao - 1
+
+    linha("-")
+    print(f"Transações empilhadas: {len(conta['historico'])}")
+    print(f"Saldo atual          : {formatar_moeda(conta['saldo'])}")
+
+
+def validar_estorno(conta, contas, transacao):
+    """
+    Verifica se a transação do topo da pilha pode ser desfeita.
+
+    Devolve (True, "") quando o estorno é possível ou (False, motivo).
+    """
+    tipo = transacao["tipo"]
+
+    if tipo in TIPOS_NAO_ESTORNAVEIS:
+        return False, "Esta transação só pode ser estornada pela conta de origem."
+
+    if transacao["delta"] > 0 and conta["saldo"] < transacao["delta"]:
+        return False, "Saldo insuficiente para devolver o valor creditado."
+
+    if tipo == "PIX ENVIADO":
+        destino = buscar_conta(contas, transacao["destino"])
+        if destino is None:
+            return False, "Conta de destino não localizada."
+        if destino["saldo"] < transacao["valor"]:
+            return False, "A conta de destino não possui saldo para devolver o PIX."
+
+    return True, ""
+
+
+def aplicar_reversao(conta, contas, transacao):
+    """Desfaz o efeito no saldo e os efeitos colaterais da transação."""
+    tipo = transacao["tipo"]
+
+    conta["saldo"] = round(conta["saldo"] - transacao["delta"], 2)
+
+    if tipo == "PIX ENVIADO":
+        destino = buscar_conta(contas, transacao["destino"])
+        destino["saldo"] = round(destino["saldo"] - transacao["valor"], 2)
+        registrar_transacao(
+            destino,
+            "ESTORNO RECEBIDO",
+            transacao["valor"],
+            -transacao["valor"],
+            f"Estorno de PIX da conta {conta['numero']}",
+        )
+
+    elif tipo == "BOLETO PAGO":
+        conta["fila_boletos"].insert(0, transacao["boleto"])
+
+
+def estornar_ultima_transacao(conta, contas):
+    """
+    Desempilha (pop) a transação do topo do histórico e reverte o movimento.
+
+    Operação LIFO: a última transação registrada é a primeira a ser desfeita.
+    """
+    titulo("ESTORNO DA ÚLTIMA TRANSAÇÃO")
+
+    if not conta["historico"]:
+        print("[ERRO] Não há transações na pilha para estornar.")
+        return
+
+    topo = conta["historico"][-1]
+    print(f"Topo da pilha: {topo['tipo']} de {formatar_moeda(topo['valor'])}")
+    print(f"Registrada em: {topo['data']}")
+
+    permitido, motivo = validar_estorno(conta, contas, topo)
+    if not permitido:
+        print(f"[ERRO] {motivo}")
+        print("[AVISO] Estorno não realizado.")
+        return
+
+    transacao = conta["historico"].pop()
+    aplicar_reversao(conta, contas, transacao)
+
+    print(f"[OK] Transação '{transacao['tipo']}' estornada com sucesso.")
+    informar_saldo(conta)
+
+
+# ---------------------------------------------------------------------------
 # Nível 1 - Operações financeiras básicas
 # ---------------------------------------------------------------------------
 def consultar_saldo(conta):
@@ -227,6 +383,7 @@ def depositar(conta):
         return
 
     conta["saldo"] = round(conta["saldo"] + valor, 2)
+    registrar_transacao(conta, "DEPÓSITO", valor, valor, "Depósito em conta")
 
     print(f"[OK] Depósito de {formatar_moeda(valor)} realizado com sucesso.")
     informar_saldo(conta)
@@ -255,6 +412,7 @@ def sacar(conta):
         return
 
     conta["saldo"] = round(conta["saldo"] - valor, 2)
+    registrar_transacao(conta, "SAQUE", valor, -valor, "Saque em conta")
 
     print(f"[OK] Saque de {formatar_moeda(valor)} realizado com sucesso.")
     informar_saldo(conta)
@@ -301,8 +459,110 @@ def transferir_pix(conta, contas):
     conta["saldo"] = round(conta["saldo"] - valor, 2)
     destino["saldo"] = round(destino["saldo"] + valor, 2)
 
+    registrar_transacao(
+        conta,
+        "PIX ENVIADO",
+        valor,
+        -valor,
+        f"PIX para {destino['nome']} (conta {destino['numero']})",
+        {"destino": destino["numero"]},
+    )
+    registrar_transacao(
+        destino,
+        "PIX RECEBIDO",
+        valor,
+        valor,
+        f"PIX de {conta['nome']} (conta {conta['numero']})",
+    )
+
     print(f"[OK] PIX de {formatar_moeda(valor)} enviado com sucesso.")
     informar_saldo(conta)
+
+
+# ---------------------------------------------------------------------------
+# Nível 3 - TAD Fila: boletos agendados (FIFO)
+# ---------------------------------------------------------------------------
+def agendar_boleto(conta):
+    """Enfileira (append) um novo boleto no fim da fila de pagamentos."""
+    titulo("AGENDAR BOLETO")
+
+    descricao = ler_texto("Descrição do boleto")
+    if not descricao:
+        print("[ERRO] A descrição do boleto não pode ficar vazia.")
+        return
+
+    valor = ler_valor("boleto")
+    if valor is None:
+        print("[AVISO] Boleto não agendado.")
+        return
+
+    conta["fila_boletos"].append({"descricao": descricao, "valor": valor})
+
+    print(f"[OK] Boleto '{descricao}' de {formatar_moeda(valor)} agendado.")
+    print(f"     Posição na fila: {len(conta['fila_boletos'])}")
+
+
+def consultar_fila(conta):
+    """Exibe a fila de boletos na ordem de processamento (FIFO)."""
+    titulo("FILA DE BOLETOS AGENDADOS")
+
+    if not conta["fila_boletos"]:
+        print("[AVISO] Não há boletos agendados.")
+        return
+
+    print("Leitura da fila: do início (próximo a ser pago) para o fim.")
+    linha("-")
+
+    for posicao, boleto in enumerate(conta["fila_boletos"], start=1):
+        print(
+            f"{posicao:>3}. "
+            f"{boleto['descricao']:<38}"
+            f"{formatar_moeda(boleto['valor']):>14}"
+        )
+
+    linha("-")
+    total = sum(boleto["valor"] for boleto in conta["fila_boletos"])
+    print(f"Boletos na fila: {len(conta['fila_boletos'])}")
+    print(f"Total agendado : {formatar_moeda(total)}")
+
+
+def pagar_proximo_boleto(conta):
+    """
+    Desenfileira (pop(0)) o boleto mais antigo e realiza o pagamento.
+
+    Sem saldo suficiente, o boleto permanece na primeira posição.
+    """
+    titulo("PAGAMENTO DO PRÓXIMO BOLETO")
+
+    if not conta["fila_boletos"]:
+        print("[ERRO] Não há boletos na fila para pagamento.")
+        return
+
+    proximo = conta["fila_boletos"][0]
+    print(f"Próximo da fila: {proximo['descricao']}")
+    print(f"Valor          : {formatar_moeda(proximo['valor'])}")
+
+    if proximo["valor"] > conta["saldo"]:
+        print("[ERRO] Saldo insuficiente para pagar este boleto.")
+        print(f"       Saldo disponível: {formatar_moeda(conta['saldo'])}")
+        print("[AVISO] O boleto permanece na primeira posição da fila.")
+        return
+
+    boleto = conta["fila_boletos"].pop(0)
+    conta["saldo"] = round(conta["saldo"] - boleto["valor"], 2)
+
+    registrar_transacao(
+        conta,
+        "BOLETO PAGO",
+        boleto["valor"],
+        -boleto["valor"],
+        f"Pagamento de boleto: {boleto['descricao']}",
+        {"boleto": boleto},
+    )
+
+    print(f"[OK] Boleto '{boleto['descricao']}' pago com sucesso.")
+    informar_saldo(conta)
+    print(f"[FILA] Boletos restantes: {len(conta['fila_boletos'])}")
 
 
 # ---------------------------------------------------------------------------
@@ -333,13 +593,23 @@ def main():
         elif opcao == "6":
             transferir_pix(conta, contas)
         elif opcao == "7":
+            exibir_extrato(conta)
+        elif opcao == "8":
+            estornar_ultima_transacao(conta, contas)
+        elif opcao == "9":
+            agendar_boleto(conta)
+        elif opcao == "10":
+            pagar_proximo_boleto(conta)
+        elif opcao == "11":
+            consultar_fila(conta)
+        elif opcao == "12":
             print()
             print(f"[SALDO] Saldo final: {formatar_moeda(conta['saldo'])}")
             print("Obrigado por usar o ByteBank. Até logo!")
             executando = False
         else:
             print()
-            print("[ERRO] Opção inválida. Escolha uma opção entre 1 e 7.")
+            print("[ERRO] Opção inválida. Escolha uma opção entre 1 e 12.")
 
 
 if __name__ == "__main__":
