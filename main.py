@@ -36,9 +36,22 @@ Funcionalidades extras (item 4 - pontuação bônus)
     - Programa de fidelidade BytePoints com resgate em cashback.
     - Empréstimos pré-aprovados com parcelamento passivo.
 
+Manipulação de arquivos
+    - Módulo de Persistência TXT: salvar_contas_txt(contas) grava a base
+      de contas em arquivo texto (um registro por linha) e
+      carregar_contas_txt() a restaura quando a aplicação é reiniciada.
+      A base é gravada ao sair, sob demanda pelo menu e também quando o
+      programa é interrompido (Ctrl+C).
+    - Analisador de Log HTTP: lê o arquivo de log do servidor linha a
+      linha e contabiliza as requisições com código 200 (Sucesso) e
+      404 (Não Encontrado).
+
 Execução: python main.py   (Python 3.10+, apenas biblioteca padrão)
 """
 
+import json
+import os
+import re
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
@@ -96,6 +109,20 @@ TIPOS_DE_GASTO = (
 
 # Transações que só podem ser estornadas pela conta de origem.
 TIPOS_NAO_ESTORNAVEIS = ("PIX RECEBIDO", "ESTORNO RECEBIDO")
+
+# Persistência em arquivo texto
+ARQUIVO_CONTAS = "contas_bytebank.txt"
+CABECALHO_ARQUIVO = "# ByteBank - base de contas (um registro JSON por linha)"
+
+# Analisador de log HTTP
+ARQUIVO_LOG_PADRAO = "access.log"
+CODIGO_SUCESSO = 200
+CODIGO_NAO_ENCONTRADO = 404
+
+# No formato de log padrão dos servidores web (Common/Combined Log Format),
+# o código de status é o número de 3 dígitos logo após a requisição entre
+# aspas. Ex.: 127.0.0.1 - - [14/Oct/2026:10:00:00 -0300] "GET / HTTP/1.1" 200 512
+PADRAO_STATUS_HTTP = re.compile(r'"[^"]*"\s+(\d{3})\b')
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +201,9 @@ def exibir_menu():
     print("[27] Contratar Empréstimo")
     print("[28] Pagar Parcela do Empréstimo")
     print("[29] Consultar Empréstimos")
-    print("[30] Sair")
+    print("[30] Salvar Base de Contas (TXT)")
+    print("[31] Analisar Log HTTP")
+    print("[32] Sair")
     linha("-")
 
 
@@ -1466,15 +1495,310 @@ def consultar_emprestimos(conta):
 
 
 # ---------------------------------------------------------------------------
+# Arquivos - Módulo de Persistência TXT
+# ---------------------------------------------------------------------------
+def indice_do_emprestimo(conta, emprestimo):
+    """
+    Devolve a posição do empréstimo na lista da conta, ou -1.
+
+    A comparação usa 'is' (mesmo objeto), porque a transação e a lista
+    de empréstimos apontam para o MESMO dicionário em memória.
+    """
+    for indice, item in enumerate(conta["emprestimos"]):
+        if item is emprestimo:
+            return indice
+    return -1
+
+
+def preparar_conta_para_gravacao(conta):
+    """
+    Monta uma cópia da conta pronta para virar texto.
+
+    No arquivo não existe "referência" entre objetos: se a transação
+    guardasse o empréstimo inteiro, ao recarregar ela ganharia uma cópia
+    desligada da lista de empréstimos, e o estorno de uma parcela deixaria
+    de atualizar o contrato. Por isso a transação grava só o índice do
+    empréstimo (campo emprestimo_ref).
+    """
+    registro = dict(conta)
+    historico = []
+
+    for transacao in conta["historico"]:
+        copia = dict(transacao)
+        if "emprestimo" in copia:
+            indice = indice_do_emprestimo(conta, transacao["emprestimo"])
+            if indice >= 0:
+                del copia["emprestimo"]
+                copia["emprestimo_ref"] = indice
+        historico.append(copia)
+
+    registro["historico"] = historico
+    return registro
+
+
+def restaurar_conta(registro):
+    """
+    Reconstrói o dicionário de uma conta a partir de um registro lido.
+
+    Parte de criar_conta() para que campos ausentes no arquivo recebam o
+    valor padrão. Levanta ValueError, KeyError, TypeError ou IndexError
+    quando o registro está corrompido.
+    """
+    conta = criar_conta(
+        str(registro["numero"]),
+        str(registro["nome"]),
+        str(registro.get("cpf", "")),
+        round(float(registro.get("saldo", SALDO_INICIAL)), 2),
+    )
+
+    estruturas = {
+        "historico": list,
+        "fila_boletos": list,
+        "cofrinhos": dict,
+        "emprestimos": list,
+    }
+    for chave, tipo in estruturas.items():
+        if chave in registro:
+            if not isinstance(registro[chave], tipo):
+                raise TypeError(f"campo '{chave}' com tipo inválido")
+            conta[chave] = registro[chave]
+
+    if isinstance(registro.get("cartao"), dict):
+        conta["cartao"].update(registro["cartao"])
+
+    for moeda, quantidade in registro.get("moedas", {}).items():
+        if moeda in conta["moedas"]:
+            conta["moedas"][moeda] = float(quantidade)
+
+    conta["pontos"] = int(registro.get("pontos", 0))
+
+    # Religa cada transação ao mesmo objeto de empréstimo da lista.
+    for transacao in conta["historico"]:
+        if "emprestimo_ref" in transacao:
+            indice = transacao.pop("emprestimo_ref")
+            transacao["emprestimo"] = conta["emprestimos"][indice]
+
+    return conta
+
+
+def salvar_contas_txt(contas, caminho=ARQUIVO_CONTAS):
+    """
+    Grava toda a base de contas em um arquivo texto.
+
+    Formato: uma linha de cabeçalho (comentário com #) seguida de uma
+    linha por conta, em JSON. A gravação é feita primeiro em um arquivo
+    temporário e só depois substitui o original, para que uma falha no
+    meio do caminho não corrompa a base já salva.
+
+    Devolve True em caso de sucesso e False em caso de erro.
+    """
+    temporario = caminho + ".tmp"
+
+    try:
+        with open(temporario, "w", encoding="utf-8") as arquivo:
+            arquivo.write(CABECALHO_ARQUIVO + "\n")
+            for conta in contas:
+                registro = preparar_conta_para_gravacao(conta)
+                arquivo.write(json.dumps(registro, ensure_ascii=False) + "\n")
+        os.replace(temporario, caminho)
+    except (OSError, TypeError, ValueError) as erro:
+        print(f"[ERRO] Não foi possível salvar a base de contas: {erro}")
+        return False
+
+    return True
+
+
+def carregar_contas_txt(caminho=ARQUIVO_CONTAS):
+    """
+    Lê o arquivo texto e devolve a lista de contas restaurada.
+
+    Devolve lista vazia quando o arquivo ainda não existe (primeira
+    execução). Linhas em branco e comentários (#) são ignorados; linhas
+    corrompidas ou com número de conta repetido geram aviso e também são
+    ignoradas, sem derrubar o carregamento das demais.
+    """
+    contas = []
+
+    if not os.path.exists(caminho):
+        return contas
+
+    try:
+        with open(caminho, "r", encoding="utf-8") as arquivo:
+            for numero_linha, texto in enumerate(arquivo, start=1):
+                texto = texto.strip()
+                if not texto or texto.startswith("#"):
+                    continue
+
+                try:
+                    conta = restaurar_conta(json.loads(texto))
+                except (ValueError, KeyError, TypeError, IndexError,
+                        AttributeError):
+                    print(f"[AVISO] Linha {numero_linha} do arquivo ignorada: "
+                          f"registro inválido.")
+                    continue
+
+                repetida = False
+                for existente in contas:
+                    if existente["numero"] == conta["numero"]:
+                        repetida = True
+                if repetida:
+                    print(f"[AVISO] Linha {numero_linha} ignorada: conta "
+                          f"{conta['numero']} repetida.")
+                    continue
+
+                contas.append(conta)
+    except (OSError, UnicodeDecodeError) as erro:
+        print(f"[ERRO] Não foi possível ler a base de contas: {erro}")
+        return []
+
+    return contas
+
+
+def salvar_base(contas):
+    """Opção de menu: grava a base e informa o resultado ao usuário."""
+    titulo("SALVAR BASE DE CONTAS")
+
+    if salvar_contas_txt(contas):
+        print(f"[OK] {len(contas)} conta(s) gravada(s) em '{ARQUIVO_CONTAS}'.")
+    else:
+        print("[AVISO] A base não foi gravada.")
+
+
+def iniciar_base():
+    """
+    Restaura a base salva ou, na primeira execução, cria a conta padrão.
+
+    A conta em uso no menu é sempre a primeira da lista.
+    """
+    contas = carregar_contas_txt()
+
+    if contas:
+        print(f"[BASE] {len(contas)} conta(s) restaurada(s) de "
+              f"'{ARQUIVO_CONTAS}'.")
+        return contas
+
+    if os.path.exists(ARQUIVO_CONTAS):
+        print(f"[AVISO] Nenhuma conta válida em '{ARQUIVO_CONTAS}'. "
+              f"O arquivo será sobrescrito no próximo salvamento.")
+    else:
+        print("[BASE] Nenhuma base salva encontrada. Iniciando nova base.")
+
+    return [criar_conta(str(NUMERO_CONTA_INICIAL), TITULAR, "", SALDO_INICIAL)]
+
+
+# ---------------------------------------------------------------------------
+# Arquivos - Analisador de Log HTTP
+# ---------------------------------------------------------------------------
+def analisar_log_http(caminho):
+    """
+    Lê o arquivo de log do servidor e conta as requisições por código.
+
+    Percorre o arquivo linha a linha (sem carregar tudo na memória) e
+    devolve o dicionário:
+        {"linhas": n, "invalidas": n, "por_codigo": {codigo: quantidade}}
+
+    Levanta OSError (ex.: FileNotFoundError) quando o arquivo não pode
+    ser aberto; o tratamento fica a cargo de quem chama.
+    """
+    resumo = {"linhas": 0, "invalidas": 0, "por_codigo": {}}
+
+    with open(caminho, "r", encoding="utf-8", errors="replace") as arquivo:
+        for registro in arquivo:
+            if not registro.strip():
+                continue
+
+            resumo["linhas"] = resumo["linhas"] + 1
+            encontrado = PADRAO_STATUS_HTTP.search(registro)
+
+            if encontrado is None:
+                resumo["invalidas"] = resumo["invalidas"] + 1
+                continue
+
+            codigo = int(encontrado.group(1))
+            por_codigo = resumo["por_codigo"]
+            por_codigo[codigo] = por_codigo.get(codigo, 0) + 1
+
+    return resumo
+
+
+def percentual(parte, total):
+    """Devolve o percentual formatado (ex.: 37,5%), protegido contra total zero."""
+    if total == 0:
+        return "0,0%"
+    return f"{parte / total * 100:.1f}%".replace(".", ",")
+
+
+def exibir_analise_log():
+    """Opção de menu: solicita o arquivo de log e exibe a contabilização."""
+    titulo("ANALISADOR DE LOG HTTP")
+
+    caminho = ler_texto(f"Arquivo de log [Enter = {ARQUIVO_LOG_PADRAO}]")
+    if not caminho:
+        caminho = ARQUIVO_LOG_PADRAO
+
+    try:
+        resumo = analisar_log_http(caminho)
+    except FileNotFoundError:
+        print(f"[ERRO] Arquivo '{caminho}' não encontrado.")
+        return
+    except OSError as erro:
+        print(f"[ERRO] Não foi possível ler o arquivo: {erro}")
+        return
+
+    if resumo["linhas"] == 0:
+        print("[AVISO] O arquivo de log está vazio.")
+        return
+
+    por_codigo = resumo["por_codigo"]
+    validas = resumo["linhas"] - resumo["invalidas"]
+    sucesso = por_codigo.get(CODIGO_SUCESSO, 0)
+    nao_encontrado = por_codigo.get(CODIGO_NAO_ENCONTRADO, 0)
+    outros = validas - sucesso - nao_encontrado
+
+    print(f"Arquivo analisado: {caminho}")
+    linha("-")
+    print(f"{'200 - Sucesso':<28}{sucesso:>10}{percentual(sucesso, validas):>10}")
+    print(f"{'404 - Não Encontrado':<28}{nao_encontrado:>10}"
+          f"{percentual(nao_encontrado, validas):>10}")
+    print(f"{'Demais códigos':<28}{outros:>10}{percentual(outros, validas):>10}")
+    linha("-")
+    print(f"{'Requisições válidas':<28}{validas:>10}")
+    print(f"{'Linhas fora do padrão':<28}{resumo['invalidas']:>10}")
+    print(f"{'Total de linhas lidas':<28}{resumo['linhas']:>10}")
+
+
+# ---------------------------------------------------------------------------
 # Loop principal do sistema
 # ---------------------------------------------------------------------------
+def encerrar(contas, conta):
+    """Grava a base de contas e exibe a mensagem de despedida."""
+    print()
+    if salvar_contas_txt(contas):
+        print(f"[BASE] Base de contas gravada em '{ARQUIVO_CONTAS}'.")
+    print(f"[SALDO] Saldo final: {formatar_moeda(conta['saldo'])}")
+    print("Obrigado por usar o ByteBank. Até logo!")
+
+
 def main():
     """Mantém o menu do ByteBank em execução até o usuário escolher sair."""
-    contas = [criar_conta(str(NUMERO_CONTA_INICIAL), TITULAR, "", SALDO_INICIAL)]
+    contas = iniciar_base()
     conta = contas[0]
-    executando = True
 
     exibir_cabecalho(conta)
+
+    try:
+        executar_menu(conta, contas)
+    except (KeyboardInterrupt, EOFError):
+        # Ctrl+C ou fim da entrada: não perde o que foi feito na sessão.
+        print()
+        print("[AVISO] Execução interrompida.")
+
+    encerrar(contas, conta)
+
+
+def executar_menu(conta, contas):
+    """Loop do menu: devolve o controle quando o usuário escolhe sair."""
+    executando = True
 
     while executando:
         exibir_menu()
@@ -1539,13 +1863,14 @@ def main():
         elif opcao == "29":
             consultar_emprestimos(conta)
         elif opcao == "30":
-            print()
-            print(f"[SALDO] Saldo final: {formatar_moeda(conta['saldo'])}")
-            print("Obrigado por usar o ByteBank. Até logo!")
+            salvar_base(contas)
+        elif opcao == "31":
+            exibir_analise_log()
+        elif opcao == "32":
             executando = False
         else:
             print()
-            print("[ERRO] Opção inválida. Escolha uma opção entre 1 e 30.")
+            print("[ERRO] Opção inválida. Escolha uma opção entre 1 e 32.")
 
 
 if __name__ == "__main__":
