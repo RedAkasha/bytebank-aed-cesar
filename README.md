@@ -5,7 +5,8 @@ Sistema bancário FinTech desenvolvido em Python como projeto avaliativo (AV2) d
 Professor: Fernando Ferreira de Carvalho.
 
 O projeto é construído em **três sprints incrementais**, cada nível servindo de pré-requisito
-para o próximo. Este repositório documenta essa evolução no histórico de commits.
+para o próximo, e recebe por fim um **módulo de manipulação de arquivos**. Este repositório
+documenta essa evolução no histórico de commits.
 
 ## Squad
 
@@ -13,10 +14,19 @@ Projeto individual.
 
 - **Filipe Oliveira Nava** — fon2@cesar.school
 
-## Estado atual: os três níveis concluídos + funcionalidades extras
+## Estado atual: os três níveis concluídos + extras + manipulação de arquivos
 
-O sistema entrega os Níveis 1, 2 e 3 da especificação e as seis funcionalidades do cardápio
-de pontuação bônus. Tudo roda em memória, operado por um menu interativo em loop contínuo.
+O sistema entrega os Níveis 1, 2 e 3 da especificação, as seis funcionalidades do cardápio
+de pontuação bônus e dois módulos de manipulação de arquivos:
+
+- **Persistência TXT:** a base de contas é gravada em arquivo texto e restaurada
+  automaticamente quando a aplicação é reiniciada.
+- **Analisador de Log HTTP:** leitura de um arquivo de log de servidor web e contabilização
+  das requisições com código 200 (Sucesso) e 404 (Não Encontrado).
+
+Durante a execução, as operações acontecem em memória, por um menu interativo em loop
+contínuo. A base só vai para o disco nos momentos descritos em
+[Persistência TXT](#persistência-txt).
 
 ## Funcionalidades
 
@@ -27,7 +37,7 @@ de pontuação bônus. Tudo roda em memória, operado por um menu interativo em 
 | `[1]` | Consultar Saldo | Exibe o saldo disponível formatado em Real (R$). |
 | `[2]` | Depositar | Credita um valor na conta. |
 | `[3]` | Sacar | Debita um valor da conta, respeitando o limite por operação. |
-| `[30]` | Sair | Encerra o sistema exibindo o saldo final. |
+| `[32]` | Sair | Grava a base de contas e encerra o sistema exibindo o saldo final. |
 
 ### Nível 2 — Múltiplas contas e transferência PIX
 
@@ -58,6 +68,38 @@ de pontuação bônus. Tudo roda em memória, operado por um menu interativo em 
 | `[24]`–`[25]` | BytePoints | Acúmulo automático de pontos em saques e transferências, resgatáveis como cashback em saldo. |
 | `[26]`–`[29]` | Empréstimos pré-aprovados | Simulação e contratação com base no saldo atual, creditando o valor e gerando o parcelamento passivo. |
 
+### Manipulação de arquivos
+
+| Opção | Módulo | Descrição |
+|-------|--------|-----------|
+| `[30]` | Persistência TXT | Grava sob demanda a base de contas em `contas_bytebank.txt`. A restauração acontece sozinha ao iniciar. |
+| `[31]` | Analisador de Log HTTP | Lê um log de servidor (padrão: `access.log`) e contabiliza as requisições 200 e 404, com percentuais. |
+
+#### Persistência TXT
+
+- `salvar_contas_txt(contas)` grava todas as contas em `contas_bytebank.txt`: uma linha de
+  cabeçalho (comentário iniciado por `#`) e **um registro por linha**, em JSON.
+- `carregar_contas_txt()` lê o arquivo ao iniciar o programa e reconstrói a lista de
+  dicionários. Saldos, pilha de transações, fila de boletos, cofrinhos, cartão, moedas,
+  BytePoints e empréstimos voltam exatamente como estavam.
+- A base é gravada em três momentos: ao sair pela opção `[32]`, sob demanda pela opção `[30]`
+  e quando a execução é interrompida (Ctrl+C ou fim da entrada).
+- Na primeira execução o arquivo ainda não existe; o sistema cria a conta padrão `1001`.
+
+#### Analisador de Log HTTP
+
+- Lê o arquivo **linha a linha**, sem carregar o log inteiro na memória.
+- Aceita o formato padrão dos servidores web (Common/Combined Log Format, usado por Apache e
+  Nginx), em que o código de status é o número de 3 dígitos logo após a requisição entre aspas:
+
+  ```
+  192.168.0.10 - - [14/Oct/2026:09:00:01 -0300] "GET / HTTP/1.1" 200 5120 "-" "Mozilla/5.0"
+  ```
+
+- Contabiliza os códigos 200 (Sucesso) e 404 (Não Encontrado) e informa também os demais
+  códigos, as linhas fora do padrão e o total de linhas lidas.
+- O repositório inclui um `access.log` de exemplo para teste.
+
 ## Regras de negócio implementadas
 
 - **Saldo insuficiente:** saques, PIX, boletos e pagamentos maiores que o saldo disponível
@@ -76,6 +118,16 @@ de pontuação bônus. Tudo roda em memória, operado por um menu interativo em 
   empréstimo com parcelas já pagas. Ao ser aceito, o estorno desfaz também os efeitos
   colaterais: devolve o valor ao remetente, recompõe a fatura do cartão, devolve o boleto ao
   início da fila e retira os pontos que haviam sido creditados.
+- **Gravação segura:** a base é escrita primeiro em um arquivo temporário, que só depois
+  substitui o original. Uma falha no meio da gravação não corrompe a base já salva.
+- **Arquivo de base corrompido:** linhas inválidas ou com número de conta repetido são
+  ignoradas com aviso, e as demais contas são carregadas normalmente.
+- **Estorno após reiniciar:** o vínculo entre cada transação de empréstimo e o contrato
+  correspondente é preservado no arquivo. Uma parcela paga antes de reiniciar o sistema
+  continua estornável depois.
+- **Log inexistente ou fora do padrão:** arquivo não encontrado gera mensagem de erro sem
+  encerrar o programa; linhas que não seguem o formato são contadas à parte, sem distorcer
+  os percentuais.
 
 ## Organização do código
 
@@ -93,8 +145,13 @@ O `main.py` está modularizado em funções (`def` / `return`), separadas em cam
   `agendar_boleto`, `pagar_proximo_boleto`, `consultar_fila`.
 - **Funcionalidades extras:** um bloco de funções por módulo (cofrinhos, relatório, cartão,
   câmbio, BytePoints e empréstimos).
+- **Persistência TXT:** `salvar_contas_txt`, `carregar_contas_txt`,
+  `preparar_conta_para_gravacao`, `restaurar_conta`, `indice_do_emprestimo`, `salvar_base`,
+  `iniciar_base`.
+- **Analisador de Log HTTP:** `analisar_log_http`, `exibir_analise_log`, `percentual`.
 
-O loop principal fica isolado em `main()`.
+O loop do menu fica em `executar_menu()`. A função `main()` restaura a base, executa o menu e,
+ao final (por escolha do usuário ou por interrupção), chama `encerrar()`, que grava a base.
 
 ### Estruturas de dados
 
@@ -118,7 +175,27 @@ estruturas:
 ```
 
 Os parâmetros de negócio (limite de saque, taxas de câmbio, juros do cofrinho e do
-empréstimo, valor do ponto) estão isolados como constantes no topo do arquivo.
+empréstimo, valor do ponto) e os nomes de arquivo (`ARQUIVO_CONTAS`, `ARQUIVO_LOG_PADRAO`)
+estão isolados como constantes no topo do arquivo.
+
+### Formato do arquivo de base
+
+Cada linha de `contas_bytebank.txt` guarda um dicionário de conta completo (aqui abreviado):
+
+```
+# ByteBank - base de contas (um registro JSON por linha)
+{"numero": "1001", "nome": "Cliente ByteBank", "cpf": "", "saldo": 1385.0, "historico": [...], ...}
+{"numero": "1002", "nome": "Ana Souza", "cpf": "12345678900", "saldo": 100.0, "historico": [...], ...}
+```
+
+O registro por linha em JSON foi escolhido porque a conta tem estruturas aninhadas (pilha,
+fila, cofrinhos, cartão), que um formato de colunas separadas por `;` não representaria sem
+um formato próprio para cada uma.
+
+Em memória, cada transação de empréstimo e a lista `emprestimos` apontam para o **mesmo**
+dicionário. No arquivo não existe referência entre objetos. Por isso a transação grava apenas
+a posição do contrato (`emprestimo_ref`), e o vínculo é refeito na leitura. Sem isso, após
+reiniciar, o estorno de uma parcela alteraria uma cópia solta e não o contrato.
 
 ## Roadmap
 
@@ -129,10 +206,12 @@ empréstimo, valor do ponto) estão isolados como constantes no topo do arquivo.
       transação e Fila (FIFO) de pagamentos agendados.
 - [x] **Funcionalidades extras:** cofrinhos, categorização de gastos, cartão de crédito,
       carteira multimoedas, BytePoints e empréstimos pré-aprovados.
+- [x] **Manipulação de arquivos:** persistência da base de contas em TXT e analisador de
+      log HTTP (códigos 200 e 404).
 
 ## Versionamento
 
-A evolução do código está registrada no histórico de commits, um commit principal por nível:
+A evolução do código está registrada no histórico de commits, um commit principal por etapa:
 
 | Commit | Entrega |
 |--------|---------|
@@ -140,8 +219,21 @@ A evolução do código está registrada no histórico de commits, um commit pri
 | `feat: ... (Nivel 2)` | Lista de dicionários com múltiplas contas, cadastro, busca e PIX. |
 | `feat: ... (Nivel 3)` | Extrato em Pilha (LIFO) com estorno via `pop()` e fila de boletos (FIFO) via `pop(0)`. |
 | `feat: ... (bonus)` | Cofrinhos, categorização de gastos, cartão, multimoedas, BytePoints e empréstimos. |
+| `feat: ... (arquivos)` | Persistência TXT da base de contas e analisador de log HTTP. |
 
 Para acompanhar a evolução: `git log --oneline`.
+
+## Estrutura do repositório
+
+```
+bytebank-aed-cesar/
+├── main.py               # sistema completo
+├── access.log            # log de servidor de exemplo para o analisador
+└── README.md
+```
+
+O arquivo `contas_bytebank.txt` é gerado na primeira execução, na pasta de onde o programa é
+executado. Por conter os dados de uso, convém mantê-lo fora do repositório (`.gitignore`).
 
 ## Como executar
 
@@ -159,15 +251,24 @@ No Windows, caso o comando `python` não seja reconhecido, use:
 py main.py
 ```
 
-Não há dependências externas: o projeto usa apenas a biblioteca padrão do Python.
+Não há dependências externas: o projeto usa apenas a biblioteca padrão do Python
+(`json`, `os`, `re` e `datetime`).
 
-O sistema inicia com uma única conta (número `1001`, saldo zerado) e opera sempre sobre ela.
-As contas criadas pela opção `[4]` servem como destino de PIX e podem ser localizadas pela
-busca. Para testar o fluxo completo, comece por um depósito na opção `[2]`.
+Na primeira execução, o sistema inicia com uma única conta (número `1001`, saldo zerado). Nas
+execuções seguintes, restaura a base gravada em `contas_bytebank.txt`. O menu opera sempre
+sobre a primeira conta da base. As contas criadas pela opção `[4]` servem como destino de PIX
+e podem ser localizadas pela busca. Para testar o fluxo completo, comece por um depósito na
+opção `[2]`.
+
+Para começar do zero, basta apagar `contas_bytebank.txt` antes de executar.
 
 ## Exemplo de uso
 
+Primeira execução, com depósito e saída:
+
 ```
+[BASE] Nenhuma base salva encontrada. Iniciando nova base.
+
 ========================================================
                     === ByteBank ===
          Conta 1001 - Titular: Cliente ByteBank
@@ -178,7 +279,9 @@ busca. Para testar o fluxo completo, comece por um depósito na opção `[2]`.
 [2]  Depositar
 [3]  Sacar
 ...
-[30] Sair
+[30] Salvar Base de Contas (TXT)
+[31] Analisar Log HTTP
+[32] Sair
 --------------------------------------------------------
 > Digite a operação desejada: 2
 
@@ -186,6 +289,18 @@ busca. Para testar o fluxo completo, comece por um depósito na opção `[2]`.
 Informe o valor do depósito: R$ 3000
 [OK] Depósito de R$ 3.000,00 realizado com sucesso.
 [SALDO] Novo saldo: R$ 3.000,00
+...
+> Digite a operação desejada: 32
+
+[BASE] Base de contas gravada em 'contas_bytebank.txt'.
+[SALDO] Saldo final: R$ 3.000,00
+Obrigado por usar o ByteBank. Até logo!
+```
+
+Ao executar novamente, a base é restaurada:
+
+```
+[BASE] 1 conta(s) restaurada(s) de 'contas_bytebank.txt'.
 ```
 
 Extrato como pilha, após alguns movimentos:
@@ -215,4 +330,20 @@ Topo da pilha: BOLETO PAGO de R$ 150,00
 Registrada em: 17/09/2026 20:48
 [OK] Transação 'BOLETO PAGO' estornada com sucesso.
 [SALDO] Novo saldo: R$ 2.500,00
+```
+
+Análise do `access.log` de exemplo (opção `[31]`, Enter para usar o arquivo padrão):
+
+```
+>>> ANALISADOR DE LOG HTTP
+Arquivo de log [Enter = access.log]:
+Arquivo analisado: access.log
+--------------------------------------------------------
+200 - Sucesso                        9     56,2%
+404 - Não Encontrado                 4     25,0%
+Demais códigos                       3     18,8%
+--------------------------------------------------------
+Requisições válidas                 16
+Linhas fora do padrão                1
+Total de linhas lidas               17
 ```
