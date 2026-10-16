@@ -5,8 +5,9 @@ Sistema bancário FinTech desenvolvido em Python como projeto avaliativo (AV2) d
 Professor: Fernando Ferreira de Carvalho.
 
 O projeto é construído em **três sprints incrementais**, cada nível servindo de pré-requisito
-para o próximo, e recebe por fim um **módulo de manipulação de arquivos**. Este repositório
-documenta essa evolução no histórico de commits.
+para o próximo, recebe um **módulo de manipulação de arquivos** e, por fim, as classes de
+**Programação Orientada a Objetos** (`Cliente`, `ContaCorrente` e `CartaoCredito`). Este
+repositório documenta essa evolução no histórico de commits.
 
 ## Squad
 
@@ -14,15 +15,18 @@ Projeto individual.
 
 - **Filipe Oliveira Nava** — fon2@cesar.school
 
-## Estado atual: os três níveis concluídos + extras + manipulação de arquivos
+## Estado atual: três níveis + extras + manipulação de arquivos + classes
 
 O sistema entrega os Níveis 1, 2 e 3 da especificação, as seis funcionalidades do cardápio
-de pontuação bônus e dois módulos de manipulação de arquivos:
+de pontuação bônus, dois módulos de manipulação de arquivos e as classes do módulo
+`modelos.py`:
 
 - **Persistência TXT:** a base de contas é gravada em arquivo texto e restaurada
   automaticamente quando a aplicação é reiniciada.
 - **Analisador de Log HTTP:** leitura de um arquivo de log de servidor web e contabilização
   das requisições com código 200 (Sucesso) e 404 (Não Encontrado).
+- **Classes (POO):** `Cliente`, `ContaCorrente` e `CartaoCredito`, que concentram as regras de
+  contatos, saque/depósito com cheque especial e cartão de crédito com parcelamento da fatura.
 
 Durante a execução, as operações acontecem em memória, por um menu interativo em loop
 contínuo. A base só vai para o disco nos momentos descritos em
@@ -36,14 +40,14 @@ contínuo. A base só vai para o disco nos momentos descritos em
 |-------|----------------|-----------|
 | `[1]` | Consultar Saldo | Exibe o saldo disponível formatado em Real (R$). |
 | `[2]` | Depositar | Credita um valor na conta. |
-| `[3]` | Sacar | Debita um valor da conta, respeitando o limite por operação. |
-| `[32]` | Sair | Grava a base de contas e encerra o sistema exibindo o saldo final. |
+| `[3]` | Sacar | Debita um valor da conta, respeitando o limite por operação e o cheque especial. |
+| `[37]` | Sair | Grava a base de contas e encerra o sistema exibindo o saldo final. |
 
 ### Nível 2 — Múltiplas contas e transferência PIX
 
 | Opção | Funcionalidade | Descrição |
 |-------|----------------|-----------|
-| `[4]` | Cadastrar Conta | Registra nome, CPF e gera um número de conta único. |
+| `[4]` | Cadastrar Conta | Registra nome, CPF (11 dígitos), telefone e e-mail opcionais e gera um número de conta único. |
 | `[5]` | Buscar Conta | Varre a coleção em memória e localiza a conta pelo número ou pelo CPF. |
 | `[6]` | Transferir via PIX | Debita a origem e credita o destino após validar a chave e o saldo. |
 
@@ -63,7 +67,7 @@ contínuo. A base só vai para o disco nos momentos descritos em
 |--------|--------|-----------|
 | `[12]`–`[16]` | Cofrinhos / Caixinhas | Subcontas de investimento com operações de guardar e resgatar, e rendimento simulado por juros simples (`J = C · i · t`). |
 | `[17]` | Categorização e analytics | Classifica cada gasto em uma categoria e gera o relatório com os somatórios acumulados (agrupamento em memória). |
-| `[18]`–`[20]` | Cartão de crédito | Limite aprovado, compras na modalidade crédito e pagamento da fatura com o saldo corrente. |
+| `[18]`–`[20]` | Cartão de crédito | Limite aprovado, compras na modalidade crédito e pagamento da fatura com o saldo corrente. Parcelamento da fatura na opção `[36]`. |
 | `[21]`–`[23]` | Carteira multimoedas | Saldos em USD, EUR e BTC convertidos por uma tabela de taxas de câmbio. |
 | `[24]`–`[25]` | BytePoints | Acúmulo automático de pontos em saques e transferências, resgatáveis como cashback em saldo. |
 | `[26]`–`[29]` | Empréstimos pré-aprovados | Simulação e contratação com base no saldo atual, creditando o valor e gerando o parcelamento passivo. |
@@ -75,6 +79,59 @@ contínuo. A base só vai para o disco nos momentos descritos em
 | `[30]` | Persistência TXT | Grava sob demanda a base de contas em `contas_bytebank.txt`. A restauração acontece sozinha ao iniciar. |
 | `[31]` | Analisador de Log HTTP | Lê um log de servidor (padrão: `access.log`) e contabiliza as requisições 200 e 404, com percentuais. |
 
+### Programação Orientada a Objetos (`modelos.py`)
+
+| Opção | Classe | Método usado | Descrição |
+|-------|--------|--------------|-----------|
+| `[32]` | `Cliente` | `adicionar_contato()` | Cadastra um telefone (DDD + número) ou e-mail para o titular. |
+| `[33]` | `Cliente` | `consultar_contatos()` | Lista os contatos do titular. |
+| `[1]` | `ContaCorrente` | `consultar_saldo()`, `consultar_limite()` | Saldo, cheque especial e valor disponível para saque. |
+| `[2]` / `[3]` | `ContaCorrente` | `depositar()` / `sacar()` | Depósito e saque; o saque pode usar o cheque especial. |
+| `[34]` | `ContaCorrente` | `consultar_limite()` | Limite aprovado, quanto está em uso e o máximo permitido. |
+| `[35]` | `ContaCorrente` | `aumentar_limite()` | Aumenta o cheque especial até `LIMITE_MAXIMO` (R$ 5.000,00). |
+| `[18]` | `CartaoCredito` | `comprar()` | Lança a compra na fatura, respeitando o limite disponível. |
+| `[19]` | `CartaoCredito` | `pagar()` | Abate a fatura; ao quitá-la, lança a próxima parcela do parcelamento. |
+| `[20]` | `CartaoCredito` | `consultar_limite()`, `consultar_saldo()` | Dados do cartão (número mascarado, validade, vencimento), limite, fatura e parcelas futuras. |
+| `[36]` | `CartaoCredito` | `parcelar_saldo()` | Parcela a fatura em 2, 3, 6, 10 ou 12 vezes com juros simples de 3% ao mês. |
+
+#### Classe `Cliente`
+
+| Atributos | Métodos |
+|-----------|---------|
+| `cpf`, `nome`, `contatos` | `consultar_contatos(tipo=None)`, `adicionar_contato(tipo, valor)`, `formatar_contato(contato)` |
+
+- O CPF precisa ter 11 dígitos e o nome não pode ficar vazio.
+- `contatos` é uma lista de dicionários `{"tipo": "Telefone" | "E-mail", "valor": ...}`. Telefone
+  aceita 10 ou 11 dígitos (DDD + número); e-mail precisa ter usuário, `@` e domínio. Contatos
+  repetidos são recusados.
+
+#### Classe `ContaCorrente`
+
+| Atributos | Métodos |
+|-----------|---------|
+| `id_cliente`, `saldo`, `limite` | `sacar(valor)`, `depositar(valor)`, `consultar_saldo()`, `consultar_limite()`, `aumentar_limite(valor)`, `saldo_disponivel()`, `em_cheque_especial()` |
+
+- `id_cliente` é o CPF do titular.
+- `limite` é o **cheque especial**: o saque pode deixar o saldo negativo até esse valor
+  (saldo disponível = `saldo + limite`). Toda conta nova começa com R$ 500,00.
+
+#### Classe `CartaoCredito`
+
+| Atributos | Métodos |
+|-----------|---------|
+| `nome`, `numero`, `validade`, `cvv`, `limite`, `data_pagamento`, `saldo`, `compras`, `parcelamento` | `consultar_limite()`, `pagar(valor)`, `parcelar_saldo(parcelas)`, `consultar_saldo()`, `comprar(...)`, `simular_parcelamento(parcelas)`, `limite_disponivel()`, `proximo_vencimento()`, `numero_mascarado()` |
+
+- O cartão é emitido junto com a conta (`CartaoCredito.emitir`): número de 16 dígitos com
+  dígito verificador de Luhn, validade de 5 anos (`MM/AA`), CVV aleatório e limite de
+  R$ 1.500,00. O número aparece mascarado (`**** **** **** 0014`) e o CVV não é exibido.
+- `saldo` é o valor da fatura atual e `data_pagamento` é o dia do vencimento (padrão: dia 10).
+- **Parcelamento:** `parcelar_saldo()` troca a fatura atual pela 1ª parcela. Cada vez que a
+  fatura é quitada com `pagar()`, a parcela seguinte é lançada na nova fatura. As parcelas
+  futuras continuam ocupando o limite do cartão.
+
+As classes não imprimem nada nem leem o teclado: quando uma operação não é permitida, o método
+levanta `ValueError` com o motivo, e o `main.py` só exibe a mensagem.
+
 #### Persistência TXT
 
 - `salvar_contas_txt(contas)` grava todas as contas em `contas_bytebank.txt`: uma linha de
@@ -82,7 +139,7 @@ contínuo. A base só vai para o disco nos momentos descritos em
 - `carregar_contas_txt()` lê o arquivo ao iniciar o programa e reconstrói a lista de
   dicionários. Saldos, pilha de transações, fila de boletos, cofrinhos, cartão, moedas,
   BytePoints e empréstimos voltam exatamente como estavam.
-- A base é gravada em três momentos: ao sair pela opção `[32]`, sob demanda pela opção `[30]`
+- A base é gravada em três momentos: ao sair pela opção `[37]`, sob demanda pela opção `[30]`
   e quando a execução é interrompida (Ctrl+C ou fim da entrada).
 - Na primeira execução o arquivo ainda não existe; o sistema cria a conta padrão `1001`.
 
@@ -102,8 +159,14 @@ contínuo. A base só vai para o disco nos momentos descritos em
 
 ## Regras de negócio implementadas
 
-- **Saldo insuficiente:** saques, PIX, boletos e pagamentos maiores que o saldo disponível
-  são recusados, e o saldo permanece inalterado.
+- **Saldo insuficiente:** PIX, boletos e pagamentos maiores que o saldo são recusados, e o
+  saldo permanece inalterado. O saque é o único que pode usar o cheque especial; acima de
+  `saldo + limite` ele também é recusado.
+- **Cheque especial:** o limite da conta só pode ser aumentado até `ContaCorrente.LIMITE_MAXIMO`.
+- **CPF e contatos:** o cadastro exige CPF com 11 dígitos; telefones e e-mails são validados
+  antes de entrar na lista de contatos do cliente.
+- **Parcelamento da fatura:** só uma fatura parcelada por vez; o parcelamento é recusado se o
+  total com juros ultrapassar o limite do cartão.
 - **Valores negativos:** depósitos, saques e demais operações de valor negativo ou zerado
   são bloqueados.
 - **Entradas inválidas:** texto não numérico nos valores e opções fora do menu são tratados
@@ -117,7 +180,9 @@ contínuo. A base só vai para o disco nos momentos descritos em
   inconsistente — por exemplo, um PIX cujo destinatário já gastou o valor recebido, ou um
   empréstimo com parcelas já pagas. Ao ser aceito, o estorno desfaz também os efeitos
   colaterais: devolve o valor ao remetente, recompõe a fatura do cartão, devolve o boleto ao
-  início da fila e retira os pontos que haviam sido creditados.
+  início da fila e retira os pontos que haviam sido creditados. Compras, pagamentos e
+  parcelamentos do cartão guardam o estado do cartão anterior à operação
+  (`cartao_anterior`), que é restaurado no estorno.
 - **Gravação segura:** a base é escrita primeiro em um arquivo temporário, que só depois
   substitui o original. Uma falha no meio da gravação não corrompe a base já salva.
 - **Arquivo de base corrompido:** linhas inválidas ou com número de conta repetido são
@@ -131,6 +196,13 @@ contínuo. A base só vai para o disco nos momentos descritos em
 
 ## Organização do código
 
+O código está dividido em dois arquivos:
+
+- **`modelos.py`:** as classes `Cliente`, `ContaCorrente` e `CartaoCredito`, com as regras de
+  negócio dessas operações.
+- **`main.py`:** a interface (menu, leitura e exibição), as demais funcionalidades e a
+  persistência.
+
 O `main.py` está modularizado em funções (`def` / `return`), separadas em camadas:
 
 - **Apresentação:** `exibir_cabecalho`, `exibir_menu`, `formatar_moeda`,
@@ -138,13 +210,17 @@ O `main.py` está modularizado em funções (`def` / `return`), separadas em cam
 - **Entrada e validação:** `ler_opcao`, `ler_texto`, `ler_valor`, `ler_quantidade`,
   `ler_inteiro`, `escolher_da_lista`.
 - **Coleção de contas (Nível 2):** `criar_conta`, `gerar_numero_conta`, `buscar_conta`,
-  `cadastrar_conta`, `consultar_conta`.
+  `cadastrar_conta`, `consultar_conta`, `exibir_contatos`.
+- **Ponte com as classes:** `obter_cliente` / `guardar_cliente`, `obter_conta_corrente` /
+  `guardar_conta_corrente`, `obter_cartao` / `guardar_cartao`.
+- **Cliente e conta corrente:** `cadastrar_contato`, `consultar_contatos`,
+  `consultar_limite_conta`, `aumentar_limite_conta`.
 - **Pilha e estorno (Nível 3):** `registrar_transacao`, `exibir_extrato`, `validar_estorno`,
   `aplicar_reversao`, `estornar_ultima_transacao`.
 - **Operações financeiras:** `consultar_saldo`, `depositar`, `sacar`, `transferir_pix`,
   `agendar_boleto`, `pagar_proximo_boleto`, `consultar_fila`.
 - **Funcionalidades extras:** um bloco de funções por módulo (cofrinhos, relatório, cartão,
-  câmbio, BytePoints e empréstimos).
+  câmbio, BytePoints e empréstimos). O cartão inclui `parcelar_fatura`.
 - **Persistência TXT:** `salvar_contas_txt`, `carregar_contas_txt`,
   `preparar_conta_para_gravacao`, `restaurar_conta`, `indice_do_emprestimo`, `salvar_base`,
   `iniciar_base`.
@@ -163,15 +239,27 @@ estruturas:
     "numero": "1001",
     "nome": "Cliente ByteBank",
     "cpf": "",
-    "saldo": 0.0,
+    "contatos": [],         # Cliente: telefones e e-mails
+    "saldo": 0.0,           # ContaCorrente: saldo
+    "limite": 500.0,        # ContaCorrente: cheque especial
     "historico": [],        # PILHA (LIFO) de transações
     "fila_boletos": [],     # FILA  (FIFO) de boletos agendados
     "cofrinhos": {},        # subcontas de investimento
-    "cartao": {...},        # limite, fatura e compras
+    "cartao": {...},        # CartaoCredito.para_dict(): dados, limite, saldo, compras, parcelamento
     "moedas": {...},        # saldos em USD, EUR e BTC
     "pontos": 0,            # BytePoints acumulados
     "emprestimos": [],      # contratos e parcelamento
 }
+```
+
+O dicionário continua sendo o formato de armazenamento, porque é ele que vira JSON no arquivo.
+As classes são a camada de regras: a operação monta o objeto a partir do dicionário
+(`obter_...`), chama o método e grava o resultado de volta (`guardar_...`):
+
+```python
+conta_corrente = obter_conta_corrente(conta)   # ContaCorrente(cpf, saldo, limite)
+conta_corrente.sacar(valor)                    # valida saldo + cheque especial
+guardar_conta_corrente(conta, conta_corrente)  # conta["saldo"], conta["limite"]
 ```
 
 Os parâmetros de negócio (limite de saque, taxas de câmbio, juros do cofrinho e do
@@ -208,6 +296,8 @@ reiniciar, o estorno de uma parcela alteraria uma cópia solta e não o contrato
       carteira multimoedas, BytePoints e empréstimos pré-aprovados.
 - [x] **Manipulação de arquivos:** persistência da base de contas em TXT e analisador de
       log HTTP (códigos 200 e 404).
+- [x] **Programação Orientada a Objetos:** classes `Cliente`, `ContaCorrente` (cheque
+      especial) e `CartaoCredito` (parcelamento da fatura) integradas ao menu.
 
 ## Versionamento
 
@@ -220,6 +310,7 @@ A evolução do código está registrada no histórico de commits, um commit pri
 | `feat: ... (Nivel 3)` | Extrato em Pilha (LIFO) com estorno via `pop()` e fila de boletos (FIFO) via `pop(0)`. |
 | `feat: ... (bonus)` | Cofrinhos, categorização de gastos, cartão, multimoedas, BytePoints e empréstimos. |
 | `feat: ... (arquivos)` | Persistência TXT da base de contas e analisador de log HTTP. |
+| `feat: ... (classes)` | Classes `Cliente`, `ContaCorrente` e `CartaoCredito` em `modelos.py`. |
 
 Para acompanhar a evolução: `git log --oneline`.
 
@@ -227,7 +318,8 @@ Para acompanhar a evolução: `git log --oneline`.
 
 ```
 bytebank-aed-cesar/
-├── main.py               # sistema completo
+├── main.py               # menu, interface e demais funcionalidades
+├── modelos.py            # classes Cliente, ContaCorrente e CartaoCredito
 ├── access.log            # log de servidor de exemplo para o analisador
 └── README.md
 ```
@@ -254,8 +346,10 @@ py main.py
 Não há dependências externas: o projeto usa apenas a biblioteca padrão do Python
 (`json`, `os`, `re` e `datetime`).
 
-Na primeira execução, o sistema inicia com uma única conta (número `1001`, saldo zerado). Nas
-execuções seguintes, restaura a base gravada em `contas_bytebank.txt`. O menu opera sempre
+Na primeira execução, o sistema inicia com uma única conta (número `1001`, saldo zerado,
+cheque especial de R$ 500,00 e cartão de crédito já emitido). Nas execuções seguintes,
+restaura a base gravada em `contas_bytebank.txt` (bases gravadas antes das classes também são
+lidas: os campos novos recebem os valores padrão). O menu opera sempre
 sobre a primeira conta da base. As contas criadas pela opção `[4]` servem como destino de PIX
 e podem ser localizadas pela busca. Para testar o fluxo completo, comece por um depósito na
 opção `[2]`.
@@ -281,7 +375,12 @@ Primeira execução, com depósito e saída:
 ...
 [30] Salvar Base de Contas (TXT)
 [31] Analisar Log HTTP
-[32] Sair
+[32] Cadastrar Contato
+[33] Consultar Contatos
+[34] Consultar Limite da Conta (Cheque Especial)
+[35] Aumentar Limite da Conta
+[36] Parcelar Fatura do Cartão
+[37] Sair
 --------------------------------------------------------
 > Digite a operação desejada: 2
 
@@ -290,7 +389,7 @@ Informe o valor do depósito: R$ 3000
 [OK] Depósito de R$ 3.000,00 realizado com sucesso.
 [SALDO] Novo saldo: R$ 3.000,00
 ...
-> Digite a operação desejada: 32
+> Digite a operação desejada: 37
 
 [BASE] Base de contas gravada em 'contas_bytebank.txt'.
 [SALDO] Saldo final: R$ 3.000,00
@@ -330,6 +429,56 @@ Topo da pilha: BOLETO PAGO de R$ 150,00
 Registrada em: 17/09/2026 20:48
 [OK] Transação 'BOLETO PAGO' estornada com sucesso.
 [SALDO] Novo saldo: R$ 2.500,00
+```
+
+Saque usando o cheque especial (saldo de R$ 1.000,00 e limite de R$ 500,00):
+
+```
+>>> SAQUE
+Limite por operação  : R$ 5.000,00
+Disponível para saque: R$ 1.500,00
+Informe o valor do saque: R$ 1300
+...
+[OK] Saque de R$ 1.300,00 realizado com sucesso.
+[SALDO] Novo saldo: R$ -300,00
+[AVISO] Conta utilizando o cheque especial.
+```
+
+Parcelamento de uma fatura de R$ 800,00 (opção `[36]`) e pagamento da 1ª parcela:
+
+```
+>>> PARCELAMENTO DA FATURA
+Fatura em aberto: R$ 800,00
+Juros: 3,0% ao mês (juros simples)
+...
+Simulação (juros simples: J = C * i * t)
+  Valor parcelado : R$ 800,00
+  Juros totais    : R$ 72,00
+  Total a pagar   : R$ 872,00
+  Parcelamento    : 3x de R$ 290,67
+Confirmar parcelamento? (S/N): S
+[OK] Fatura parcelada em 3x.
+     Fatura atual (parcela 1): R$ 290,67
+
+>>> PAGAMENTO DA FATURA
+Fatura em aberto: R$ 290,67
+Vencimento      : 10/11/2026
+Informe o valor do pagamento da fatura: R$ 290.67
+[OK] Pagamento de R$ 290,67 realizado.
+     Fatura restante: R$ 290,67
+[PARCELA] Parcela 2/3 de R$ 290,67 lançada na nova fatura.
+```
+
+Consulta de contatos (opção `[33]`):
+
+```
+>>> CONTATOS DO CLIENTE
+Cliente: Cliente ByteBank
+CPF    : não informado
+--------------------------------------------------------
+     Telefone : (81) 99999-1234
+     E-mail   : cliente@bytebank.com
+--------------------------------------------------------
 ```
 
 Análise do `access.log` de exemplo (opção `[31]`, Enter para usar o arquivo padrão):

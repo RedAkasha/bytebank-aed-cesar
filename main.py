@@ -46,6 +46,18 @@ Manipulação de arquivos
       linha e contabiliza as requisições com código 200 (Sucesso) e
       404 (Não Encontrado).
 
+Programação Orientada a Objetos (modelos.py)
+    - Cliente: CPF, nome e contatos (telefone/e-mail), com
+      consultar_contatos().
+    - ContaCorrente: id_cliente, saldo e limite (cheque especial), com
+      sacar(), depositar(), consultar_saldo(), consultar_limite() e
+      aumentar_limite().
+    - CartaoCredito: nome, número, validade, CVV, limite, data de
+      pagamento e saldo da fatura, com consultar_limite(), pagar(),
+      parcelar_saldo() e consultar_saldo().
+    - O dicionário da conta continua sendo o formato de armazenamento
+      (JSON); as regras de negócio dessas operações ficam nas classes.
+
 Execução: python main.py   (Python 3.10+, apenas biblioteca padrão)
 """
 
@@ -53,6 +65,8 @@ import json
 import os
 import re
 from datetime import datetime
+
+from modelos import CartaoCredito, Cliente, ContaCorrente
 
 # ---------------------------------------------------------------------------
 # Constantes de configuração do sistema
@@ -81,7 +95,10 @@ CATEGORIA_ENTRADA = "Entradas"
 TAXA_COFRINHO = 0.005
 
 # Cartão de crédito
-LIMITE_CARTAO = 1500.00
+LIMITE_CARTAO = CartaoCredito.LIMITE_PADRAO
+
+# Conta corrente - cheque especial
+LIMITE_CHEQUE_ESPECIAL = ContaCorrente.LIMITE_PADRAO
 
 # Carteira multimoedas
 TAXAS_CAMBIO = {"USD": 5.42, "EUR": 5.88, "BTC": 352000.00}
@@ -203,7 +220,12 @@ def exibir_menu():
     print("[29] Consultar Empréstimos")
     print("[30] Salvar Base de Contas (TXT)")
     print("[31] Analisar Log HTTP")
-    print("[32] Sair")
+    print("[32] Cadastrar Contato")
+    print("[33] Consultar Contatos")
+    print("[34] Consultar Limite da Conta (Cheque Especial)")
+    print("[35] Aumentar Limite da Conta")
+    print("[36] Parcelar Fatura do Cartão")
+    print("[37] Sair")
     linha("-")
 
 
@@ -310,27 +332,72 @@ def escolher_da_lista(rotulo, itens):
 # ---------------------------------------------------------------------------
 # Nível 2 - Coleção de contas em memória (lista de dicionários)
 # ---------------------------------------------------------------------------
-def criar_conta(numero, nome, cpf, saldo=SALDO_INICIAL):
+def criar_conta(numero, nome, cpf, saldo=SALDO_INICIAL, contatos=None):
     """
     Monta o dicionário que representa uma conta do ByteBank.
 
     Cada conta carrega suas próprias estruturas de dados:
         historico    -> PILHA (LIFO) de transações
         fila_boletos -> FILA  (FIFO) de pagamentos agendados
+
+    Os dados de cliente, conta corrente e cartão são gerados pelas
+    classes de modelos.py e guardados no dicionário em forma de dados.
     """
+    cliente = Cliente(cpf, nome, contatos)
+    conta_corrente = ContaCorrente(cliente.cpf, saldo, LIMITE_CHEQUE_ESPECIAL)
+    cartao = CartaoCredito.emitir(cliente.nome, numero, LIMITE_CARTAO)
+
     return {
         "numero": numero,
-        "nome": nome,
-        "cpf": cpf,
-        "saldo": saldo,
+        "nome": cliente.nome,
+        "cpf": cliente.cpf,
+        "contatos": cliente.contatos,
+        "saldo": conta_corrente.saldo,
+        "limite": conta_corrente.limite,
         "historico": [],
         "fila_boletos": [],
         "cofrinhos": {},
-        "cartao": {"limite": LIMITE_CARTAO, "fatura": 0.0, "compras": []},
+        "cartao": cartao.para_dict(),
         "moedas": {moeda: 0.0 for moeda in TAXAS_CAMBIO},
         "pontos": 0,
         "emprestimos": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# Ponte entre o dicionário da conta e as classes de modelos.py
+# ---------------------------------------------------------------------------
+def obter_cliente(conta):
+    """Monta o objeto Cliente a partir dos dados da conta."""
+    return Cliente(conta["cpf"], conta["nome"], conta["contatos"])
+
+
+def guardar_cliente(conta, cliente):
+    """Grava no dicionário da conta o estado atual do Cliente."""
+    conta["nome"] = cliente.nome
+    conta["cpf"] = cliente.cpf
+    conta["contatos"] = cliente.consultar_contatos()
+
+
+def obter_conta_corrente(conta):
+    """Monta o objeto ContaCorrente a partir dos dados da conta."""
+    return ContaCorrente(conta["cpf"], conta["saldo"], conta["limite"])
+
+
+def guardar_conta_corrente(conta, conta_corrente):
+    """Grava no dicionário da conta o saldo e o limite da ContaCorrente."""
+    conta["saldo"] = conta_corrente.saldo
+    conta["limite"] = conta_corrente.limite
+
+
+def obter_cartao(conta):
+    """Monta o objeto CartaoCredito a partir dos dados da conta."""
+    return CartaoCredito.de_dict(conta["cartao"])
+
+
+def guardar_cartao(conta, cartao):
+    """Grava no dicionário da conta o estado atual do CartaoCredito."""
+    conta["cartao"] = cartao.para_dict()
 
 
 def gerar_numero_conta(contas):
@@ -375,20 +442,47 @@ def cadastrar_conta(contas):
         print("[ERRO] O nome do titular não pode ficar vazio.")
         return
 
-    entrada = ler_texto("CPF (somente números)")
+    entrada = ler_texto("CPF (11 dígitos)")
     cpf = "".join(caractere for caractere in entrada if caractere.isdigit())
     if not cpf:
         print("[ERRO] CPF inválido. Informe apenas números.")
         return
 
-    if buscar_conta(contas, cpf) is not None:
+    try:
+        cliente = Cliente(cpf, nome)
+    except ValueError as erro:
+        print(f"[ERRO] {erro}")
+        return
+
+    if buscar_conta(contas, cliente.cpf) is not None:
         print("[ERRO] Já existe uma conta cadastrada para este CPF.")
         return
 
-    numero = gerar_numero_conta(contas)
-    contas.append(criar_conta(numero, nome, cpf))
+    # Contatos opcionais: Enter em branco pula o campo.
+    for tipo in Cliente.TIPOS_CONTATO:
+        valor = ler_texto(f"{tipo} (Enter para pular)")
+        if not valor:
+            continue
+        try:
+            cliente.adicionar_contato(tipo, valor)
+        except ValueError as erro:
+            print(f"[AVISO] {erro} Contato não cadastrado.")
 
-    print(f"[OK] Conta {numero} cadastrada para {nome}.")
+    numero = gerar_numero_conta(contas)
+    contas.append(criar_conta(numero, cliente.nome, cliente.cpf,
+                              contatos=cliente.contatos))
+
+    print(f"[OK] Conta {numero} cadastrada para {cliente.nome}.")
+
+
+def exibir_contatos(contatos):
+    """Imprime a lista de contatos de um cliente."""
+    if not contatos:
+        print("     Nenhum contato cadastrado.")
+        return
+
+    for contato in contatos:
+        print(f"     {contato['tipo']:<9}: {Cliente.formatar_contato(contato)}")
 
 
 def consultar_conta(contas):
@@ -406,6 +500,46 @@ def consultar_conta(contas):
     print(f"     Titular: {conta['nome']}")
     print(f"     CPF    : {conta['cpf'] if conta['cpf'] else 'não informado'}")
     print(f"     Saldo  : {formatar_moeda(conta['saldo'])}")
+    print(f"     Limite : {formatar_moeda(conta['limite'])} (cheque especial)")
+    print("     Contatos:")
+    exibir_contatos(conta["contatos"])
+
+
+# ---------------------------------------------------------------------------
+# Classe Cliente - contatos do titular
+# ---------------------------------------------------------------------------
+def cadastrar_contato(conta):
+    """Adiciona um telefone ou e-mail ao cliente titular da conta."""
+    titulo("CADASTRAR CONTATO")
+
+    tipo = escolher_da_lista("Tipo de contato", list(Cliente.TIPOS_CONTATO))
+    if tipo is None:
+        return
+
+    valor = ler_texto(tipo)
+    cliente = obter_cliente(conta)
+
+    try:
+        contato = cliente.adicionar_contato(tipo, valor)
+    except ValueError as erro:
+        print(f"[ERRO] {erro}")
+        print("[AVISO] Contato não cadastrado.")
+        return
+
+    guardar_cliente(conta, cliente)
+    print(f"[OK] {tipo} {Cliente.formatar_contato(contato)} cadastrado.")
+
+
+def consultar_contatos(conta):
+    """Exibe os contatos do titular usando Cliente.consultar_contatos()."""
+    titulo("CONTATOS DO CLIENTE")
+
+    cliente = obter_cliente(conta)
+    print(f"Cliente: {cliente.nome}")
+    print(f"CPF    : {cliente.cpf if cliente.cpf else 'não informado'}")
+    linha("-")
+    exibir_contatos(cliente.consultar_contatos())
+    linha("-")
 
 
 # ---------------------------------------------------------------------------
@@ -530,15 +664,22 @@ def aplicar_reversao(conta, contas, transacao):
         cofrinho = conta["cofrinhos"][transacao["cofrinho"]]
         cofrinho["saldo"] = round(cofrinho["saldo"] + transacao["valor"], 2)
 
+    elif "cartao_anterior" in transacao:
+        # Compra, pagamento ou parcelamento da fatura: como a transação está
+        # no topo da pilha, nenhuma operação mexeu no cartão depois dela, e
+        # basta restaurar o cartão como estava antes.
+        guardar_cartao(conta, CartaoCredito.de_dict(transacao["cartao_anterior"]))
+
     elif tipo == "COMPRA CRÉDITO":
-        conta["cartao"]["fatura"] = round(
-            conta["cartao"]["fatura"] - transacao["valor"], 2
+        # Transações gravadas antes da versão com classes.
+        conta["cartao"]["saldo"] = round(
+            conta["cartao"]["saldo"] - transacao["valor"], 2
         )
         conta["cartao"]["compras"].pop()
 
     elif tipo == "PAGAMENTO FATURA":
-        conta["cartao"]["fatura"] = round(
-            conta["cartao"]["fatura"] + transacao["valor"], 2
+        conta["cartao"]["saldo"] = round(
+            conta["cartao"]["saldo"] + transacao["valor"], 2
         )
         conta["cartao"]["compras"].extend(transacao["compras_liquidadas"])
 
@@ -603,8 +744,18 @@ def estornar_ultima_transacao(conta, contas):
 # ---------------------------------------------------------------------------
 def consultar_saldo(conta):
     """Exibe o saldo atual da conta. Não altera o saldo."""
+    conta_corrente = obter_conta_corrente(conta)
+
     print()
-    print(f"[SALDO] Saldo disponível: {formatar_moeda(conta['saldo'])}")
+    print(f"[SALDO] Saldo em conta       : "
+          f"{formatar_moeda(conta_corrente.consultar_saldo())}")
+    print(f"        Cheque especial      : "
+          f"{formatar_moeda(conta_corrente.consultar_limite())}")
+    print(f"        Disponível para saque: "
+          f"{formatar_moeda(conta_corrente.saldo_disponivel())}")
+
+    if conta_corrente.em_cheque_especial():
+        print("[AVISO] Conta utilizando o cheque especial.")
 
 
 def depositar(conta):
@@ -616,7 +767,10 @@ def depositar(conta):
         print("[AVISO] Depósito não realizado.")
         return
 
-    conta["saldo"] = round(conta["saldo"] + valor, 2)
+    conta_corrente = obter_conta_corrente(conta)
+    conta_corrente.depositar(valor)
+    guardar_conta_corrente(conta, conta_corrente)
+
     registrar_transacao(
         conta, "DEPÓSITO", valor, valor, CATEGORIA_ENTRADA, "Depósito em conta"
     )
@@ -626,9 +780,17 @@ def depositar(conta):
 
 
 def sacar(conta):
-    """Debita um valor da conta após validar saldo e limite por operação."""
+    """
+    Debita um valor da conta após validar o limite por operação.
+
+    A validação de saldo fica em ContaCorrente.sacar(), que permite
+    usar o cheque especial (saldo + limite).
+    """
     titulo("SAQUE")
-    print(f"Limite por operação: {formatar_moeda(LIMITE_SAQUE)}")
+    conta_corrente = obter_conta_corrente(conta)
+    print(f"Limite por operação  : {formatar_moeda(LIMITE_SAQUE)}")
+    print(f"Disponível para saque: "
+          f"{formatar_moeda(conta_corrente.saldo_disponivel())}")
 
     valor = ler_valor("saque")
     if valor is None:
@@ -641,9 +803,11 @@ def sacar(conta):
         print("[AVISO] Saque não realizado.")
         return
 
-    if valor > conta["saldo"]:
-        print("[ERRO] Saldo insuficiente para realizar o saque.")
-        print(f"       Saldo disponível: {formatar_moeda(conta['saldo'])}")
+    if valor > conta_corrente.saldo_disponivel():
+        print("[ERRO] Saldo insuficiente para realizar o saque, mesmo usando "
+              "o cheque especial.")
+        print(f"       Disponível para saque: "
+              f"{formatar_moeda(conta_corrente.saldo_disponivel())}")
         print("[AVISO] Saque não realizado.")
         return
 
@@ -652,7 +816,9 @@ def sacar(conta):
         categoria = "Outros"
         print("[AVISO] Categoria não reconhecida. Classificado como 'Outros'.")
 
-    conta["saldo"] = round(conta["saldo"] - valor, 2)
+    conta_corrente.sacar(valor)
+    guardar_conta_corrente(conta, conta_corrente)
+
     transacao = registrar_transacao(
         conta, "SAQUE", valor, -valor, categoria, "Saque em conta"
     )
@@ -660,6 +826,53 @@ def sacar(conta):
 
     print(f"[OK] Saque de {formatar_moeda(valor)} realizado com sucesso.")
     informar_saldo(conta)
+
+    if conta_corrente.em_cheque_especial():
+        print("[AVISO] Conta utilizando o cheque especial.")
+
+
+def consultar_limite_conta(conta):
+    """Exibe o limite do cheque especial e quanto dele está em uso."""
+    titulo("LIMITE DA CONTA (CHEQUE ESPECIAL)")
+
+    conta_corrente = obter_conta_corrente(conta)
+    limite = conta_corrente.consultar_limite()
+    em_uso = -conta_corrente.saldo if conta_corrente.em_cheque_especial() else 0.0
+
+    print(f"Limite aprovado      : {formatar_moeda(limite)}")
+    print(f"Limite em uso        : {formatar_moeda(em_uso)}")
+    print(f"Disponível para saque: "
+          f"{formatar_moeda(conta_corrente.saldo_disponivel())}")
+    print(f"Limite máximo        : {formatar_moeda(ContaCorrente.LIMITE_MAXIMO)}")
+
+
+def aumentar_limite_conta(conta):
+    """Aumenta o cheque especial usando ContaCorrente.aumentar_limite()."""
+    titulo("AUMENTAR LIMITE DA CONTA")
+
+    conta_corrente = obter_conta_corrente(conta)
+    margem = round(ContaCorrente.LIMITE_MAXIMO - conta_corrente.limite, 2)
+    print(f"Limite atual         : {formatar_moeda(conta_corrente.limite)}")
+    print(f"Aumento máximo       : {formatar_moeda(margem)}")
+
+    if margem <= 0:
+        print("[AVISO] O limite já está no valor máximo permitido.")
+        return
+
+    valor = ler_valor("aumento")
+    if valor is None:
+        print("[AVISO] Limite não alterado.")
+        return
+
+    try:
+        conta_corrente.aumentar_limite(valor)
+    except ValueError as erro:
+        print(f"[ERRO] {erro}")
+        print("[AVISO] Limite não alterado.")
+        return
+
+    guardar_conta_corrente(conta, conta_corrente)
+    print(f"[OK] Novo limite: {formatar_moeda(conta_corrente.limite)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1028,15 +1241,12 @@ def relatorio_de_gastos(conta):
 # ---------------------------------------------------------------------------
 # Extra - Cartão de crédito e fatura
 # ---------------------------------------------------------------------------
-def limite_disponivel(conta):
-    """Devolve o limite de crédito ainda disponível."""
-    return round(conta["cartao"]["limite"] - conta["cartao"]["fatura"], 2)
-
-
 def comprar_no_credito(conta):
-    """Lança uma compra na fatura, respeitando o limite aprovado."""
+    """Lança uma compra na fatura usando CartaoCredito.comprar()."""
     titulo("COMPRA NO CRÉDITO")
-    print(f"Limite disponível: {formatar_moeda(limite_disponivel(conta))}")
+
+    cartao = obter_cartao(conta)
+    print(f"Limite disponível: {formatar_moeda(cartao.limite_disponivel())}")
 
     descricao = ler_texto("Descrição da compra")
     if not descricao:
@@ -1048,7 +1258,7 @@ def comprar_no_credito(conta):
         print("[AVISO] Compra não realizada.")
         return
 
-    if valor > limite_disponivel(conta):
+    if valor > cartao.limite_disponivel():
         print("[ERRO] Limite de crédito insuficiente para esta compra.")
         print("[AVISO] Compra não realizada.")
         return
@@ -1058,10 +1268,9 @@ def comprar_no_credito(conta):
         categoria = "Outros"
         print("[AVISO] Categoria não reconhecida. Classificado como 'Outros'.")
 
-    conta["cartao"]["compras"].append(
-        {"descricao": descricao, "valor": valor, "categoria": categoria}
-    )
-    conta["cartao"]["fatura"] = round(conta["cartao"]["fatura"] + valor, 2)
+    anterior = cartao.para_dict()
+    cartao.comprar(valor, descricao, categoria)
+    guardar_cartao(conta, cartao)
 
     registrar_transacao(
         conta,
@@ -1070,44 +1279,46 @@ def comprar_no_credito(conta):
         0.0,
         categoria,
         f"Compra no crédito: {descricao}",
+        {"cartao_anterior": anterior},
     )
 
     print(f"[OK] Compra de {formatar_moeda(valor)} lançada na fatura.")
-    print(f"     Fatura atual: {formatar_moeda(conta['cartao']['fatura'])}")
+    print(f"     Fatura atual: {formatar_moeda(cartao.consultar_saldo())}")
 
 
 def pagar_fatura(conta):
-    """Paga a fatura utilizando o saldo corrente."""
+    """Paga a fatura com o saldo corrente usando CartaoCredito.pagar()."""
     titulo("PAGAMENTO DA FATURA")
 
-    cartao = conta["cartao"]
+    cartao = obter_cartao(conta)
 
-    if cartao["fatura"] <= 0:
+    if cartao.consultar_saldo() <= 0:
         print("[AVISO] Não há fatura em aberto.")
         return
 
-    print(f"Fatura em aberto: {formatar_moeda(cartao['fatura'])}")
+    print(f"Fatura em aberto: {formatar_moeda(cartao.consultar_saldo())}")
+    print(f"Vencimento      : {cartao.proximo_vencimento()}")
 
     valor = ler_valor("pagamento da fatura")
     if valor is None:
         print("[AVISO] Pagamento não realizado.")
         return
 
-    if valor > cartao["fatura"]:
-        print("[ERRO] O valor informado é maior que a fatura em aberto.")
-        return
-
     if valor > conta["saldo"]:
         print("[ERRO] Saldo insuficiente para pagar a fatura.")
         return
 
-    conta["saldo"] = round(conta["saldo"] - valor, 2)
-    cartao["fatura"] = round(cartao["fatura"] - valor, 2)
+    anterior = cartao.para_dict()
 
-    liquidadas = []
-    if cartao["fatura"] == 0:
-        liquidadas = list(cartao["compras"])
-        cartao["compras"].clear()
+    try:
+        parcela_lancada = cartao.pagar(valor)
+    except ValueError as erro:
+        print(f"[ERRO] {erro}")
+        print("[AVISO] Pagamento não realizado.")
+        return
+
+    guardar_cartao(conta, cartao)
+    conta["saldo"] = round(conta["saldo"] - valor, 2)
 
     registrar_transacao(
         conta,
@@ -1116,29 +1327,115 @@ def pagar_fatura(conta):
         -valor,
         "Outros",
         "Pagamento de fatura do cartão de crédito",
-        {"compras_liquidadas": liquidadas},
+        {"cartao_anterior": anterior},
     )
 
     print(f"[OK] Pagamento de {formatar_moeda(valor)} realizado.")
-    print(f"     Fatura restante: {formatar_moeda(cartao['fatura'])}")
+    print(f"     Fatura restante: {formatar_moeda(cartao.consultar_saldo())}")
+
+    if parcela_lancada:
+        plano = cartao.parcelamento
+        print(f"[PARCELA] Parcela {plano['lancadas']}/{plano['parcelas']} de "
+              f"{formatar_moeda(plano['valor_parcela'])} lançada na nova fatura.")
+
     informar_saldo(conta)
 
 
+def parcelar_fatura(conta):
+    """Parcela a fatura atual usando CartaoCredito.parcelar_saldo()."""
+    titulo("PARCELAMENTO DA FATURA")
+
+    cartao = obter_cartao(conta)
+
+    if cartao.consultar_saldo() <= 0:
+        print("[AVISO] Não há fatura em aberto para parcelar.")
+        return
+
+    if cartao.parcelas_restantes() > 0:
+        print("[ERRO] Já existe um parcelamento em andamento.")
+        return
+
+    print(f"Fatura em aberto: {formatar_moeda(cartao.consultar_saldo())}")
+    print(f"Juros: {cartao.TAXA_JUROS_PARCELAMENTO * 100:.1f}% ao mês "
+          f"(juros simples)".replace(".", ","))
+
+    escolha = escolher_da_lista(
+        "Quantidade de parcelas",
+        [f"{p} parcelas" for p in CartaoCredito.PARCELAS_DISPONIVEIS],
+    )
+    if escolha is None:
+        return
+
+    parcelas = int(escolha.split()[0])
+    plano = cartao.simular_parcelamento(parcelas)
+
+    print("Simulação (juros simples: J = C * i * t)")
+    print(f"  Valor parcelado : {formatar_moeda(plano['principal'])}")
+    print(f"  Juros totais    : {formatar_moeda(plano['juros'])}")
+    print(f"  Total a pagar   : {formatar_moeda(plano['total'])}")
+    print(f"  Parcelamento    : {parcelas}x de "
+          f"{formatar_moeda(plano['valor_parcela'])}")
+
+    confirmacao = ler_texto("Confirmar parcelamento? (S/N)").upper()
+    if confirmacao != "S":
+        print("[AVISO] Parcelamento cancelado.")
+        return
+
+    anterior = cartao.para_dict()
+
+    try:
+        cartao.parcelar_saldo(parcelas)
+    except ValueError as erro:
+        print(f"[ERRO] {erro}")
+        print("[AVISO] Parcelamento não realizado.")
+        return
+
+    guardar_cartao(conta, cartao)
+
+    registrar_transacao(
+        conta,
+        "PARCELAMENTO FATURA",
+        plano["total"],
+        0.0,
+        "Outros",
+        f"Fatura parcelada em {parcelas}x de "
+        f"{formatar_moeda(plano['valor_parcela'])}",
+        {"cartao_anterior": anterior},
+    )
+
+    print(f"[OK] Fatura parcelada em {parcelas}x.")
+    print(f"     Fatura atual (parcela 1): "
+          f"{formatar_moeda(cartao.consultar_saldo())}")
+
+
 def consultar_cartao(conta):
-    """Exibe o limite, a fatura e as compras lançadas."""
+    """Exibe os dados do cartão, o limite, a fatura e as compras lançadas."""
     titulo("CARTÃO DE CRÉDITO")
 
-    cartao = conta["cartao"]
-    print(f"Limite aprovado  : {formatar_moeda(cartao['limite'])}")
-    print(f"Fatura em aberto : {formatar_moeda(cartao['fatura'])}")
-    print(f"Limite disponível: {formatar_moeda(limite_disponivel(conta))}")
+    cartao = obter_cartao(conta)
+    print(f"Titular          : {cartao.nome}")
+    print(f"Número           : {cartao.numero_mascarado()}")
+    print(f"Validade         : {cartao.validade}")
+    print(f"Vencimento       : todo dia {cartao.data_pagamento} "
+          f"(próximo: {cartao.proximo_vencimento()})")
+    linha("-")
+    print(f"Limite aprovado  : {formatar_moeda(cartao.consultar_limite())}")
+    print(f"Fatura em aberto : {formatar_moeda(cartao.consultar_saldo())}")
 
-    if not cartao["compras"]:
+    if cartao.parcelas_restantes() > 0:
+        plano = cartao.parcelamento
+        print(f"Parcelas futuras : {cartao.parcelas_restantes()}x de "
+              f"{formatar_moeda(plano['valor_parcela'])} "
+              f"({formatar_moeda(cartao.saldo_parcelado())})")
+
+    print(f"Limite disponível: {formatar_moeda(cartao.limite_disponivel())}")
+
+    if not cartao.compras:
         print("[AVISO] Nenhuma compra lançada na fatura atual.")
         return
 
     linha("-")
-    for compra in cartao["compras"]:
+    for compra in cartao.compras:
         print(
             f"{compra['descricao']:<26}"
             f"{compra['categoria']:<16}"
@@ -1547,11 +1844,16 @@ def restaurar_conta(registro):
     conta = criar_conta(
         str(registro["numero"]),
         str(registro["nome"]),
-        str(registro.get("cpf", "")),
+        "",
         round(float(registro.get("saldo", SALDO_INICIAL)), 2),
     )
+    # O CPF é copiado direto (sem passar pela validação de 11 dígitos da
+    # classe Cliente) para não descartar contas gravadas por versões antigas.
+    conta["cpf"] = str(registro.get("cpf", ""))
+    conta["limite"] = round(float(registro.get("limite", LIMITE_CHEQUE_ESPECIAL)), 2)
 
     estruturas = {
+        "contatos": list,
         "historico": list,
         "fila_boletos": list,
         "cofrinhos": dict,
@@ -1564,7 +1866,12 @@ def restaurar_conta(registro):
             conta[chave] = registro[chave]
 
     if isinstance(registro.get("cartao"), dict):
-        conta["cartao"].update(registro["cartao"])
+        cartao = dict(registro["cartao"])
+        # Bases antigas guardavam a fatura na chave "fatura".
+        if "fatura" in cartao:
+            cartao["saldo"] = cartao.pop("fatura")
+        conta["cartao"].update(cartao)
+        conta["cartao"] = CartaoCredito.de_dict(conta["cartao"]).para_dict()
 
     for moeda, quantidade in registro.get("moedas", {}).items():
         if moeda in conta["moedas"]:
@@ -1867,10 +2174,20 @@ def executar_menu(conta, contas):
         elif opcao == "31":
             exibir_analise_log()
         elif opcao == "32":
+            cadastrar_contato(conta)
+        elif opcao == "33":
+            consultar_contatos(conta)
+        elif opcao == "34":
+            consultar_limite_conta(conta)
+        elif opcao == "35":
+            aumentar_limite_conta(conta)
+        elif opcao == "36":
+            parcelar_fatura(conta)
+        elif opcao == "37":
             executando = False
         else:
             print()
-            print("[ERRO] Opção inválida. Escolha uma opção entre 1 e 32.")
+            print("[ERRO] Opção inválida. Escolha uma opção entre 1 e 37.")
 
 
 if __name__ == "__main__":
